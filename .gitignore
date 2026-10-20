@@ -1,0 +1,5 @@
+bin/
+*.test
+*.out
+*.wasm
+.DS_Store
