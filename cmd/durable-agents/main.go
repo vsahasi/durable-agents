@@ -1,6 +1,4 @@
 // Command durable-agents is the entry point for the runtime.
-//
-// Nothing works yet. See docs/ROADMAP.md for what comes first.
 package main
 
 import (
@@ -15,6 +13,6 @@ func main() {
 		fmt.Println("durable-agents", version)
 		return
 	}
-	fmt.Fprintln(os.Stderr, "durable-agents: nothing works yet. See docs/ROADMAP.md.")
+	fmt.Fprintln(os.Stderr, "durable-agents: nothing runs yet")
 	os.Exit(2)
 }

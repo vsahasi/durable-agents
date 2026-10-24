@@ -1,62 +1,35 @@
 # durable-agents
 
-A durable runtime for AI agents, written in Go.
+A runtime for AI agents, in Go.
 
-It runs long-horizon agents so that a crash, a redeploy, or a `kill -9` at any instant loses nothing. The run resumes exactly where it was, no model call is repeated, and no side effect happens twice. Code the agent writes runs in a sandbox it cannot escape, inside token, dollar, and wall-clock budgets the agent cannot override.
+An agent run is a sequence of steps: model calls, tool calls, and the code between them. The runtime records each step in an append-only log and reconstructs a run from its log. A process that dies at any point resumes the run from the last committed step without repeating a model call or a side effect. Code the agent writes runs in a sandbox with explicit capabilities, and every run has token, dollar, and time budgets enforced by the runtime.
 
-**Status: day 0 (2026-10-20). Nothing works yet.** The roadmap below is the plan and the [devlog](docs/DEVLOG.md) is the record. Every stage has acceptance criteria that are tests, not adjectives.
+Status: early. Nothing runs yet.
 
-## The promise
+## Parts
 
-- **Durable.** Every step of a run is an event in an append-only log. Replaying the log reconstructs the run. Kill the process anywhere and it continues from the last event.
-- **Exactly once.** Side effects (send the email, place the order, write the file) carry idempotency keys and go through an outbox. A crash between "decided to send" and "sent" cannot produce two emails or zero.
-- **Sandboxed.** Agent-written code runs in WebAssembly with explicit capabilities. No filesystem, no network, no clock unless granted. CPU fuel and memory are capped.
-- **Budgeted.** Tokens, dollars, and wall-clock time are enforced by the runtime, per run and per tenant.
-- **Testable.** A fault injector crashes the runtime before and after every effect. A deterministic simulator replaces the clock, the network, and the model so an entire multi-agent run reproduces from a seed.
+**Event log.** One append-only log per run. Each record is length-prefixed and checksummed, and a record is committed only after fsync. A torn final record is detected and discarded on open. The log is the only source of truth; all other run state is derived from it.
 
-## Why
+**Replay.** Workflow code is deterministic and is re-executed against the log to rebuild state. Nondeterministic inputs are recorded the first time they happen and served from the log on replay: model responses, tool results, time, random numbers. If re-execution produces an event sequence that diverges from the log, the run halts with a nondeterminism error instead of continuing on wrong state.
 
-The loop around a model call is the easy part of an agent. The hard part is everything that makes it safe to leave running: durability, exactly-once effects, isolation, scheduling, and a way to test failure modes you cannot reproduce by hand. That is what this project is for, and it is built to run real workloads, starting with my own.
+**Effects.** A tool call that changes the world is an effect. The intent to perform it is committed to the log in the same write as the decision that produced it, then performed by a separate loop and marked done. Each effect carries an idempotency key derived from run and step, so a crash between intent and done produces a retry with the same key, not a duplicate. Retries use exponential backoff with jitter. A permanently failing step ends the run in a defined terminal state.
 
-## Roadmap
+**Sandbox.** Agent-written code runs in WebAssembly through wasmtime. Filesystem paths, network hosts, and the clock are capabilities granted per run and denied by default. CPU is metered as fuel and memory is capped; exceeding either terminates the step with a recorded reason.
 
-| Stage | Milestone | Status |
-|---|---|---|
-| 1 | Event log and deterministic replay. Survives `kill -9` at any point. | not started |
-| 2 | Exactly-once side effects, proven by fault injection at every boundary. | not started |
-| 3 | WebAssembly sandbox with capabilities and budgets. | not started |
-| 4 | Scheduler for many concurrent runs, with tracing. | not started |
-| 5 | Deterministic simulation testing, then a real production workload. | not started |
+**Budgets.** Tokens, dollars, and wall-clock time per run, checked by the runtime at step boundaries. A run that exhausts a budget stops in a defined state.
 
-Acceptance criteria for each stage are in [docs/ROADMAP.md](docs/ROADMAP.md).
+**Scheduler.** Many runs execute concurrently with priorities. Provider rate limits are modeled as token buckets and the scheduler applies backpressure rather than letting calls fail. Shutdown drains in-flight steps to an event boundary.
 
-## Design principles
+**Tracing.** Every step is a span with parent run, timing, token counts, and cost, exportable as OTLP.
 
-1. The event log is the only source of truth. Everything else is a cache of it.
-2. Anything nondeterministic (model output, time, randomness, network) is recorded once and replayed forever.
-3. Every side effect is idempotent or it does not exist.
-4. The runtime, not the agent, enforces budgets and permissions.
-5. If a failure mode cannot be injected in a test, it is not handled.
+**Testing.** A fault injector crashes the runtime before and after every effect and checks the external world for duplicates and losses. A simulator replaces the clock, network, and model with seeded versions so a complete multi-agent run reproduces from a seed and interleavings can be fuzzed.
 
-## Non-goals
+## Build
 
-This is not a prompt framework, not an agent, and not a hosted service. It is the layer agents run on.
+Go 1.27 or later.
 
-## Development
-
-```sh
-make test   # go vet + go test -race ./...
-```
-
-Requires Go 1.27 or later, native arm64 on Apple silicon.
-
-## Documents
-
-- [docs/ROADMAP.md](docs/ROADMAP.md): stages, acceptance criteria, and the evidence each stage publishes
-- [docs/DESIGN.md](docs/DESIGN.md): the design questions, with decisions recorded as they are made
-- [docs/adr/](docs/adr/): architecture decision records
-- [docs/DEVLOG.md](docs/DEVLOG.md): dated progress log
+    make test    # go vet + go test -race ./...
 
 ## License
 
-MIT. Built by [Veer Sahasi](https://github.com/vsahasi).
+MIT.
